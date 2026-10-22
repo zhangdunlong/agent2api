@@ -1,7 +1,12 @@
-name: build
-
-# Build the Windows NSIS installer as a workflow artifact. Release publication
-# stays separate and is handled by scripts/release.sh after the run finishes.
+# Build workflow.
+#
+# Two independent jobs:
+#   windows      - Tauri desktop installer (NSIS), consumed by scripts/release.sh
+#   linux-server - headless server bundle (agent2api-server + ui/) as
+#                  agent2api-server-linux-<arch>.tar.gz, consumed by the
+#                  in-container self-updater (see selfupdate.rs / version.rs:
+#                  server_bundle_name). Trigger manually via workflow_dispatch
+#                  when no v* tag is being cut.
 on:
   workflow_dispatch:
   push:
@@ -43,4 +48,58 @@ jobs:
         with:
           name: windows-nsis
           path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  linux-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (stable + aarch64 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      # arm64 需要交叉 C 工具链（rusqlite bundled 的 SQLite、ring 的 C/汇编源码）
+      - name: Install aarch64 cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Configure cargo linker
+        run: |
+          mkdir -p "$HOME/.cargo"
+          cat >> "$HOME/.cargo/config.toml" <<EOF
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop-tauri/src-tauri -> ../../target
+          key: linux-server-arm64
+
+      - name: Build agent2api-server (aarch64)
+        run: cargo build --release -p agent2api-server --target aarch64-unknown-linux-gnu --target-dir target
+        working-directory: desktop-tauri/src-tauri
+
+      - name: Package bundle (binary + ui/)
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp "desktop-tauri/src-tauri/target/aarch64-unknown-linux-gnu/release/agent2api-server" stage/
+          aarch64-linux-gnu-strip stage/agent2api-server || true
+          mkdir -p stage/ui
+          cp -r desktop-tauri/ui/. stage/ui/
+          # 与 Dockerfile bundle 阶段同构：根下一个可执行文件 + ui/ 目录
+          tar -czf agent2api-server-linux-aarch64.tar.gz -C stage .
+          ls -lh agent2api-server-linux-aarch64.tar.gz
+          tar -tzf agent2api-server-linux-aarch64.tar.gz | head -5
+
+      - name: Upload server bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-server-arm64
+          path: agent2api-server-linux-aarch64.tar.gz
           if-no-files-found: error
