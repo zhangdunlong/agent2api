@@ -95,7 +95,7 @@ jobs:
           # 与 Dockerfile bundle 阶段同构：根下一个可执行文件 + ui/ 目录
           tar -czf agent2api-server-linux-aarch64.tar.gz -C stage .
           ls -lh agent2api-server-linux-aarch64.tar.gz
-          tar -tzf agent2api-server-linux-aarch64.tar.gz | head -5 || true || true
+          tar -tzf agent2api-server-linux-aarch64.tar.gz | head -5 || true
 
       - name: Upload server bundle artifact
         uses: actions/upload-artifact@v7
